@@ -1,92 +1,63 @@
-import os
-import sys
-import glob
-
+# import the necessary packages
+import multiprocessing
+import argparse
 import dlib
+# construct the argument parser and parse the arguments
+ap = argparse.ArgumentParser()
+ap.add_argument("-t", "--training", required=True,
+	help="path to input training XML file")
+ap.add_argument("-m", "--model", required=True,
+	help="path serialized dlib shape predictor model")
+args = vars(ap.parse_args())
 
-# In this example we are going to train a face detector based on the small
-# faces dataset in the examples/faces directory.  This means you need to supply
-# the path to this faces folder as a command line argument so we will know
-# where it is.
-if len(sys.argv) != 2:
-    print(
-        "Give the path to the examples/faces directory as the argument to this "
-        "program. For example, if you are in the python_examples folder then "
-        "execute this program by running:\n"
-        "    ./train_shape_predictor.py ../examples/faces")
-    exit()
-faces_folder = sys.argv[1]
-
+# grab the default options for dlib's shape predictor
+print("[INFO] setting shape predictor options...")
 options = dlib.shape_predictor_training_options()
-# Now make the object responsible for training the model.
-# This algorithm has a bunch of parameters you can mess with.  The
-# documentation for the shape_predictor_trainer explains all of them.
-# You should also read Kazemi's paper which explains all the parameters
-# in great detail.  However, here I'm just setting three of them
-# differently than their default values.  I'm doing this because we
-# have a very small dataset.  In particular, setting the oversampling
-# to a high amount (300) effectively boosts the training set size, so
-# that helps this example.
-options.oversampling_amount = 300
-# I'm also reducing the capacity of the model by explicitly increasing
-# the regularization (making nu smaller) and by using trees with
-# smaller depths.
-options.nu = 0.05
-options.tree_depth = 2
+# define the depth of each regression tree -- there will be a total
+# of 2^tree_depth leaves in each tree; small values of tree_depth
+# will be *faster* but *less accurate* while larger values will
+# generate trees that are *deeper*, *more accurate*, but will run
+# *far slower* when making predictions
+options.tree_depth = 4
+# regularization parameter in the range [0, 1] that is used to help
+# our model generalize -- values closer to 1 will make our model fit
+# the training data better, but could cause overfitting; values closer
+# to 0 will help our model generalize but will require us to have
+# training data in the order of 1000s of data points
+options.nu = 0.1
+# the number of cascades used to train the shape predictor -- this
+# parameter has a *dramtic* impact on both the *accuracy* and *output
+# size* of your model; the more cascades you have, the more accurate
+# your model can potentially be, but also the *larger* the output size
+options.cascade_depth = 15
+# number of pixels used to generate features for the random trees at
+# each cascade -- larger pixel values will make your shape predictor
+# more accurate, but slower; use large values if speed is not a
+# problem, otherwise smaller values for resource constrained/embedded
+# devices
+options.feature_pool_size = 400
+# selects best features at each cascade when training -- the larger
+# this value is, the *longer* it will take to train but (potentially)
+# the more *accurate* your model will be
+options.num_test_splits = 50
+# controls amount of "jitter" (i.e., data augmentation) when training
+# the shape predictor -- applies the supplied number of random
+# deformations, thereby performing regularization and increasing the
+# ability of our model to generalize
+options.oversampling_amount = 5
+# amount of translation jitter to apply -- the dlib docs recommend
+# values in the range [0, 0.5]
+options.oversampling_translation_jitter = 0.1
+# tell the dlib shape predictor to be verbose and print out status
+# messages our model trains
 options.be_verbose = True
-
-# dlib.train_shape_predictor() does the actual training.  It will save the
-# final predictor to predictor.dat.  The input is an XML file that lists the
-# images in the training dataset and also contains the positions of the face
-# parts.
-training_xml_path = os.path.join(faces_folder, "training_with_face_landmarks.xml")
-dlib.train_shape_predictor(training_xml_path, "predictor.dat", options)
-
-# Now that we have a model we can test it.  dlib.test_shape_predictor()
-# measures the average distance between a face landmark output by the
-# shape_predictor and where it should be according to the truth data.
-print("\nTraining accuracy: {}".format(
-    dlib.test_shape_predictor(training_xml_path, "predictor.dat")))
-# The real test is to see how well it does on data it wasn't trained on.  We
-# trained it on a very small dataset so the accuracy is not extremely high, but
-# it's still doing quite good.  Moreover, if you train it on one of the large
-# face landmarking datasets you will obtain state-of-the-art results, as shown
-# in the Kazemi paper.
-testing_xml_path = os.path.join(faces_folder, "testing_with_face_landmarks.xml")
-print("Testing accuracy: {}".format(
-    dlib.test_shape_predictor(testing_xml_path, "predictor.dat")))
-
-# Now let's use it as you would in a normal application.  First we will load it
-# from disk. We also need to load a face detector to provide the initial
-# estimate of the facial location.
-predictor = dlib.shape_predictor("predictor.dat")
-detector = dlib.get_frontal_face_detector()
-
-# Now let's run the detector and shape_predictor over the images in the faces
-# folder and display the results.
-print("Showing detections and predictions on the images in the faces folder...")
-win = dlib.image_window()
-for f in glob.glob(os.path.join(faces_folder, "*.jpg")):
-    print("Processing file: {}".format(f))
-    img = dlib.load_rgb_image(f)
-
-    win.clear_overlay()
-    win.set_image(img)
-
-    # Ask the detector to find the bounding boxes of each face. The 1 in the
-    # second argument indicates that we should upsample the image 1 time. This
-    # will make everything bigger and allow us to detect more faces.
-    dets = detector(img, 1)
-    print("Number of faces detected: {}".format(len(dets)))
-    for k, d in enumerate(dets):
-        print("Detection {}: Left: {} Top: {} Right: {} Bottom: {}".format(
-            k, d.left(), d.top(), d.right(), d.bottom()))
-        # Get the landmarks/parts for the face in box d.
-        shape = predictor(img, d)
-        print("Part 0: {}, Part 1: {} ...".format(shape.part(0),
-                                                  shape.part(1)))
-        # Draw the face landmarks on the screen.
-        win.add_overlay(shape)
-
-    win.add_overlay(dets)
-    dlib.hit_enter_to_continue()
+# number of threads/CPU cores to be used when training -- we default
+# this value to the number of available cores on the system, but you
+# can supply an integer value here if you would like
+options.num_threads = multiprocessing.cpu_count()
+# log our training options to the terminal
+print("[INFO] shape predictor options:")
+print(options)
+# train the shape predictor
+print("[INFO] training shape predictor...")
+dlib.train_shape_predictor(args["training"], args["model"], options)
