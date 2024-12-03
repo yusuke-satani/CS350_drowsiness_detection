@@ -3,6 +3,7 @@ import argparse
 import dlib
 from sklearn.model_selection import ParameterGrid, KFold
 import numpy as np
+import os
 
 def train_and_evaluate(train_xml, test_xml, options):
     dlib.train_shape_predictor(train_xml, "temp_model.dat", options)
@@ -13,6 +14,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-t", "--training", required=True, help="path to input training XML file")
     ap.add_argument("-m", "--model", required=True, help="path serialized dlib shape predictor model")
+    ap.add_argument("-e", "--test", required=True, help="path to test XML file")
     args = vars(ap.parse_args())
 
     # パラメータグリッドの定義
@@ -80,6 +82,18 @@ def main():
 
     print("\nTraining final model with best parameters...")
     dlib.train_shape_predictor(args["training"], args["model"], final_options)
+
+    # 最終モデルの評価
+    print("\nEvaluating final model...")
+    test_error = dlib.test_shape_predictor(args["test"], args["model"])
+    accuracy = 1 - test_error
+    print(f"Test Error: {test_error}")
+    print(f"Accuracy: {accuracy:.4f}")
+
+    # 一時ファイルの削除
+    os.remove("train_fold.xml")
+    os.remove("test_fold.xml")
+    os.remove("temp_model.dat")
 
 if __name__ == "__main__":
     main()
